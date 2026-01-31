@@ -1,8 +1,10 @@
 import React from 'react'
+import type { Profile } from '../services/api'
 
 interface SidebarProps {
   isOpen: boolean
   onClose: () => void
+  profile: Profile | null
 }
 
 const navItems = [
@@ -56,7 +58,11 @@ const icons: Record<string, JSX.Element> = {
   ),
 }
 
-export function Sidebar({ isOpen, onClose }: SidebarProps) {
+export function Sidebar({ isOpen, onClose, profile }: SidebarProps) {
+  const userName = profile?.name || 'User'
+  const userEmail = profile?.email || 'user@example.com'
+  const initials = profile?.initials || userName.split(' ').map(n => n[0]).join('').toUpperCase()
+
   return (
     <>
       {/* Mobile overlay */}
@@ -94,10 +100,10 @@ export function Sidebar({ isOpen, onClose }: SidebarProps) {
         
         <div className="sidebar-footer">
           <div className="user-info">
-            <div className="avatar">JD</div>
+            <div className="avatar">{initials}</div>
             <div className="user-details">
-              <span className="user-name">John Doe</span>
-              <span className="user-email">john@example.com</span>
+              <span className="user-name">{userName}</span>
+              <span className="user-email">{userEmail}</span>
             </div>
           </div>
         </div>

@@ -1,6 +1,40 @@
 import React from 'react'
+import type { Balance } from '../services/api'
 
-export function BalanceCard() {
+interface BalanceCardProps {
+  balance: Balance | null
+  isLoading: boolean
+}
+
+export function BalanceCard({ balance, isLoading }: BalanceCardProps) {
+  const formatAmount = (amount: number) => {
+    const [whole, decimal] = amount.toFixed(2).split('.')
+    return { whole: whole.replace(/\B(?=(\d{3})+(?!\d))/g, ','), decimal }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="card balance-card">
+        <div className="balance-header">
+          <span className="balance-label">Total Balance</span>
+          <span className="balance-badge">Loading...</span>
+        </div>
+        <div className="balance-amount">
+          <span className="currency">$</span>
+          <span className="amount skeleton">--,---</span>
+          <span className="cents">.--</span>
+        </div>
+      </div>
+    )
+  }
+
+  const total = balance?.total ?? 0
+  const checking = balance?.checking ?? 0
+  const savings = balance?.savings ?? 0
+  const formatted = formatAmount(total)
+  const checkingFormatted = formatAmount(checking)
+  const savingsFormatted = formatAmount(savings)
+
   return (
     <div className="card balance-card">
       <div className="balance-header">
@@ -10,8 +44,8 @@ export function BalanceCard() {
       
       <div className="balance-amount">
         <span className="currency">$</span>
-        <span className="amount">24,562</span>
-        <span className="cents">.89</span>
+        <span className="amount">{formatted.whole}</span>
+        <span className="cents">.{formatted.decimal}</span>
       </div>
       
       <div className="balance-change positive">
@@ -32,7 +66,7 @@ export function BalanceCard() {
           </div>
           <div className="account-details">
             <span className="account-name">Checking</span>
-            <span className="account-balance">$12,450.00</span>
+            <span className="account-balance">${checkingFormatted.whole}.{checkingFormatted.decimal}</span>
           </div>
         </div>
         
@@ -44,7 +78,7 @@ export function BalanceCard() {
           </div>
           <div className="account-details">
             <span className="account-name">Savings</span>
-            <span className="account-balance">$12,112.89</span>
+            <span className="account-balance">${savingsFormatted.whole}.{savingsFormatted.decimal}</span>
           </div>
         </div>
       </div>

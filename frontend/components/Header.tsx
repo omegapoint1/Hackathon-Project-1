@@ -1,16 +1,28 @@
 import React from 'react'
+import type { Profile } from '../services/api'
 
 interface HeaderProps {
   onMenuClick: () => void
+  profile: Profile | null
 }
 
-export function Header({ onMenuClick }: HeaderProps) {
+function getGreeting(): string {
+  const hour = new Date().getHours()
+  if (hour < 12) return 'Good morning'
+  if (hour < 18) return 'Good afternoon'
+  return 'Good evening'
+}
+
+export function Header({ onMenuClick, profile }: HeaderProps) {
   const currentDate = new Date().toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric'
   })
+
+  const firstName = profile?.name?.split(' ')[0] || ''
+  const greeting = getGreeting()
 
   return (
     <header className="header">
@@ -23,7 +35,7 @@ export function Header({ onMenuClick }: HeaderProps) {
           </svg>
         </button>
         <div className="header-greeting">
-          <h1>Good morning</h1>
+          <h1>{greeting}{firstName ? `, ${firstName}` : ''}</h1>
           <p className="date">{currentDate}</p>
         </div>
       </div>

@@ -30,15 +30,15 @@
 :root {
   --background: #F5F1EB;
   --background-secondary: #FFFDF9;
-  --foreground: #1A1714;
+  --foreground: #D97757;
   --foreground-secondary: #4A453E;
   --muted: #E8E3DB;
   --muted-foreground: #8A847A;
   --card: #FFFFFF;
-  --card-foreground: #1A1714;
+  --card-foreground: #D97757;
   --border: rgba(158, 140, 120, 0.2);
   --border-strong: rgba(158, 140, 120, 0.4);
-  --accent: #D4785C;
+  --accent: #D97757;
   --accent-foreground: #FFFFFF;
   --accent-secondary: #9BC1F3;
   --accent-tertiary: #A8D5BA;
@@ -51,6 +51,8 @@
   --radius-md: 12px;
   --radius-lg: 16px;
   --radius-xl: 24px;
+  --text-primary: #1A1714;
+  --text-secondary: #4A453E;
 }
 
 * {
@@ -62,7 +64,7 @@
 body {
   font-family: 'Helvetica Monospaced Pro', 'SF Mono', Monaco, monospace;
   background: var(--background);
-  color: var(--foreground);
+  color: var(--text-primary);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   font-size: 14px;
@@ -155,7 +157,7 @@ body {
 .logo-icon {
   width: 32px;
   height: 32px;
-  background: var(--foreground);
+  background: #D97757;
   color: var(--background);
   border-radius: var(--radius-sm);
   display: flex;
@@ -170,7 +172,7 @@ body {
   font-family: 'ABC Marist', sans-serif;
   font-weight: 500;
   font-size: 1.25rem;
-  color: var(--foreground);
+  color: var(--text-primary);
 }
 
 .close-btn {
@@ -222,11 +224,11 @@ body {
 
 .nav-item:hover {
   background: var(--muted);
-  color: var(--foreground);
+  color: var(--text-primary);
 }
 
 .nav-item.active {
-  background: var(--foreground);
+  background: #D97757;
   color: var(--background);
 }
 
@@ -263,7 +265,7 @@ body {
 .user-name {
   font-family: 'ABC Marist', sans-serif;
   font-weight: 500;
-  color: var(--foreground);
+  color: var(--text-primary);
   font-size: 0.875rem;
 }
 
@@ -289,7 +291,7 @@ body {
 .menu-btn {
   background: none;
   border: none;
-  color: var(--foreground);
+  color: var(--text-primary);
   cursor: pointer;
   padding: 0.5rem;
   display: flex;
@@ -307,7 +309,7 @@ body {
   font-family: 'ABC Marist', sans-serif;
   font-weight: 500;
   font-size: clamp(1.5rem, 4vw, 2rem);
-  color: var(--foreground);
+  color: var(--text-primary);
   margin-bottom: 0.25rem;
 }
 
@@ -326,7 +328,7 @@ body {
   position: relative;
   background: var(--card);
   border: 1px solid var(--border);
-  color: var(--foreground);
+  color: var(--text-primary);
   cursor: pointer;
   padding: 0.625rem;
   display: flex;
@@ -419,7 +421,7 @@ body {
   font-family: 'ABC Marist', sans-serif;
   font-weight: 500;
   font-size: 1.125rem;
-  color: var(--foreground);
+  color: var(--text-primary);
 }
 
 .card-subtitle {
@@ -429,7 +431,7 @@ body {
 
 /* Balance Card */
 .balance-card {
-  background: linear-gradient(135deg, var(--foreground) 0%, #2A2520 100%);
+  background: linear-gradient(135deg, #D97757 0%, #C06A4A 100%);
   color: var(--background);
   border: none;
 }
@@ -589,7 +591,7 @@ body {
   font-family: 'ABC Marist', sans-serif;
   font-weight: 600;
   font-size: 1.25rem;
-  color: var(--foreground);
+  color: var(--text-primary);
 }
 
 .spending-legend {
@@ -620,7 +622,7 @@ body {
 
 .legend-name {
   font-size: 0.8125rem;
-  color: var(--foreground);
+  color: var(--text-primary);
 }
 
 .legend-amount {
@@ -661,12 +663,12 @@ body {
 }
 
 .filter-tab:hover {
-  color: var(--foreground);
+  color: var(--text-primary);
 }
 
 .filter-tab.active {
   background: var(--card);
-  color: var(--foreground);
+  color: var(--text-primary);
   box-shadow: var(--shadow-sm);
 }
 
@@ -721,7 +723,7 @@ body {
   font-family: 'ABC Marist', sans-serif;
   font-weight: 500;
   font-size: 0.875rem;
-  color: var(--foreground);
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -745,7 +747,7 @@ body {
 }
 
 .transaction-amount.incoming { color: var(--positive); }
-.transaction-amount.outgoing { color: var(--foreground); }
+.transaction-amount.outgoing { color: var(--text-primary); }
 
 .transaction-date {
   font-size: 0.75rem;
@@ -772,7 +774,7 @@ body {
 .view-all-btn:hover {
   background: var(--muted);
   border-color: var(--border-strong);
-  color: var(--foreground);
+  color: var(--text-primary);
 }
 
 /* AI Helper */
@@ -815,7 +817,7 @@ body {
   font-family: 'ABC Marist', sans-serif;
   font-weight: 500;
   font-size: 1rem;
-  color: var(--foreground);
+  color: var(--text-primary);
   margin: 0;
 }
 
@@ -879,7 +881,7 @@ body {
 .quick-action-btn:hover {
   background: var(--muted);
   border-color: var(--border-strong);
-  color: var(--foreground);
+  color: var(--text-primary);
 }
 
 .ai-chat-container {
@@ -924,4 +926,68 @@ body {
   .nim-credit {
     display: none;
   }
+}
+
+/* Loading States */
+.skeleton {
+  animation: pulse 1.5s ease-in-out infinite;
+  opacity: 0.6;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.skeleton-item {
+  pointer-events: none;
+}
+
+/* Error Banner */
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.5rem;
+  margin-bottom: 1.5rem;
+  background: rgba(212, 87, 77, 0.1);
+  border: 1px solid var(--negative);
+  border-radius: var(--radius-md);
+  color: var(--negative);
+}
+
+.error-banner p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.error-banner button {
+  background: var(--negative);
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  transition: opacity 0.2s;
+}
+
+.error-banner button:hover {
+  opacity: 0.9;
+}
+
+/* Empty State */
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
 }
