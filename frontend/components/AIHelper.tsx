@@ -83,14 +83,71 @@ export function AIHelper() {
       
       ws.onopen = () => {
         setIsConnected(true)
-        console.log('[v0] WebSocket connected')
+        // Send new_conversation message to initialize the session
+        ws.send(JSON.stringify({ type: 'new_conversation' }))
       }
       
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
-          if (data.type === 'message' || data.content) {
-            const content = data.content || data.message || event.data
+          
+          // Handle different message types from the server
+          if (data.type === 'conversation_started') {
+            // Conversation initialized, ready for messages
+            return
+          }
+          
+          if (data.type === 'error') {
+            setMessages(prev => [...prev, {
+              id: Date.now().toString(),
+              role: 'assistant',
+              content: data.error || 'An error occurred',
+              timestamp: new Date()
+            }])
+            setIsLoading(false)
+            return
+          }
+          
+          // Handle text/content messages - accumulate streaming chunks
+          if (data.type === 'text' || data.type === 'content') {
+            const content = data.text || data.content || ''
+            setMessages(prev => {
+              const lastMessage = prev[prev.length - 1]
+              if (lastMessage && lastMessage.role === 'assistant' && lastMessage.id.startsWith('streaming-')) {
+                // Append to existing streaming message
+                return prev.map((msg, idx) => 
+                  idx === prev.length - 1 
+                    ? { ...msg, content: msg.content + content }
+                    : msg
+                )
+              } else {
+                // Start new streaming message
+                return [...prev, {
+                  id: 'streaming-' + Date.now().toString(),
+                  role: 'assistant',
+                  content: content,
+                  timestamp: new Date()
+                }]
+              }
+            })
+            return
+          }
+          
+          // Handle message_end to finalize streaming
+          if (data.type === 'message_end' || data.type === 'done') {
+            setIsLoading(false)
+            // Change streaming message ID to permanent
+            setMessages(prev => prev.map(msg => 
+              msg.id.startsWith('streaming-') 
+                ? { ...msg, id: Date.now().toString() }
+                : msg
+            ))
+            return
+          }
+          
+          // Handle generic message/content format
+          if (data.content || data.message) {
+            const content = data.content || data.message
             setMessages(prev => [...prev, {
               id: Date.now().toString(),
               role: 'assistant',
@@ -101,24 +158,24 @@ export function AIHelper() {
           }
         } catch {
           // Plain text response
-          setMessages(prev => [...prev, {
-            id: Date.now().toString(),
-            role: 'assistant',
-            content: event.data,
-            timestamp: new Date()
-          }])
-          setIsLoading(false)
+          if (event.data && !event.data.includes('No active conversation')) {
+            setMessages(prev => [...prev, {
+              id: Date.now().toString(),
+              role: 'assistant',
+              content: event.data,
+              timestamp: new Date()
+            }])
+            setIsLoading(false)
+          }
         }
       }
       
       ws.onclose = () => {
         setIsConnected(false)
         wsRef.current = null
-        console.log('[v0] WebSocket disconnected')
       }
       
-      ws.onerror = (error) => {
-        console.error('[v0] WebSocket error:', error)
+      ws.onerror = () => {
         setIsConnected(false)
       }
       
