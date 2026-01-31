@@ -1,11 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react'
-
-interface Message {
-  id: string
-  role: 'user' | 'assistant'
-  content: string
-  timestamp: Date
-}
+import React, { useState } from 'react'
+import { NimChat } from '@liminalcash/nim-chat'
+import '@liminalcash/nim-chat/styles.css'
 
 const quickActions = [
   { label: 'Check balance', prompt: 'What is my current account balance?', icon: 'wallet' },
@@ -46,189 +41,9 @@ const icons: Record<string, JSX.Element> = {
 
 export function AIHelper() {
   const [isExpanded, setIsExpanded] = useState(false)
-  const [messages, setMessages] = useState<Message[]>([])
-  const [inputValue, setInputValue] = useState('')
-  const [isConnected, setIsConnected] = useState(false)
-  const [isLoading, setIsLoading] = useState(false)
-  const wsRef = useRef<WebSocket | null>(null)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
   
   const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8080/ws'
-
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
-
-  useEffect(() => {
-    scrollToBottom()
-  }, [messages])
-
-  useEffect(() => {
-    if (isExpanded && !wsRef.current) {
-      connectWebSocket()
-    }
-    
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-        wsRef.current = null
-      }
-    }
-  }, [isExpanded])
-
-  const connectWebSocket = () => {
-    try {
-      const ws = new WebSocket(wsUrl)
-      
-      ws.onopen = () => {
-        setIsConnected(true)
-        // Send new_conversation message to initialize the session
-        ws.send(JSON.stringify({ type: 'new_conversation' }))
-      }
-      
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          
-          // Handle different message types from the server
-          if (data.type === 'conversation_started') {
-            // Conversation initialized, ready for messages
-            return
-          }
-          
-          if (data.type === 'error') {
-            setMessages(prev => [...prev, {
-              id: Date.now().toString(),
-              role: 'assistant',
-              content: data.error || 'An error occurred',
-              timestamp: new Date()
-            }])
-            setIsLoading(false)
-            return
-          }
-          
-          // Handle text/content messages - accumulate streaming chunks
-          if (data.type === 'text' || data.type === 'content') {
-            const content = data.text || data.content || ''
-            setMessages(prev => {
-              const lastMessage = prev[prev.length - 1]
-              if (lastMessage && lastMessage.role === 'assistant' && lastMessage.id.startsWith('streaming-')) {
-                // Append to existing streaming message
-                return prev.map((msg, idx) => 
-                  idx === prev.length - 1 
-                    ? { ...msg, content: msg.content + content }
-                    : msg
-                )
-              } else {
-                // Start new streaming message
-                return [...prev, {
-                  id: 'streaming-' + Date.now().toString(),
-                  role: 'assistant',
-                  content: content,
-                  timestamp: new Date()
-                }]
-              }
-            })
-            return
-          }
-          
-          // Handle message_end to finalize streaming
-          if (data.type === 'message_end' || data.type === 'done') {
-            setIsLoading(false)
-            // Change streaming message ID to permanent
-            setMessages(prev => prev.map(msg => 
-              msg.id.startsWith('streaming-') 
-                ? { ...msg, id: Date.now().toString() }
-                : msg
-            ))
-            return
-          }
-          
-          // Handle generic message/content format
-          if (data.content || data.message) {
-            const content = data.content || data.message
-            setMessages(prev => [...prev, {
-              id: Date.now().toString(),
-              role: 'assistant',
-              content: content,
-              timestamp: new Date()
-            }])
-            setIsLoading(false)
-          }
-        } catch {
-          // Plain text response
-          if (event.data && !event.data.includes('No active conversation')) {
-            setMessages(prev => [...prev, {
-              id: Date.now().toString(),
-              role: 'assistant',
-              content: event.data,
-              timestamp: new Date()
-            }])
-            setIsLoading(false)
-          }
-        }
-      }
-      
-      ws.onclose = () => {
-        setIsConnected(false)
-        wsRef.current = null
-      }
-      
-      ws.onerror = () => {
-        setIsConnected(false)
-      }
-      
-      wsRef.current = ws
-    } catch (error) {
-      console.error('[v0] Failed to connect WebSocket:', error)
-    }
-  }
-
-  const sendMessage = (content: string) => {
-    if (!content.trim()) return
-    
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: content.trim(),
-      timestamp: new Date()
-    }
-    
-    setMessages(prev => [...prev, userMessage])
-    setInputValue('')
-    setIsLoading(true)
-    
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ 
-        type: 'message',
-        content: content.trim() 
-      }))
-    } else {
-      // Simulate response if not connected
-      setTimeout(() => {
-        setMessages(prev => [...prev, {
-          id: (Date.now() + 1).toString(),
-          role: 'assistant',
-          content: "I'm currently unable to connect to the server. Please make sure you're logged in and the backend is running.",
-          timestamp: new Date()
-        }])
-        setIsLoading(false)
-      }, 500)
-    }
-  }
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    sendMessage(inputValue)
-  }
-
-  const handleQuickAction = (prompt: string) => {
-    setIsExpanded(true)
-    setTimeout(() => {
-      sendMessage(prompt)
-    }, 100)
-  }
+  const apiUrl = import.meta.env.VITE_API_URL || 'https://api.liminal.cash'
 
   return (
     <div className={`card ai-card ${isExpanded ? 'expanded' : ''}`}>
@@ -243,9 +58,7 @@ export function AIHelper() {
           </div>
           <div>
             <h2>Nim Assistant</h2>
-            <p className="ai-subtitle">
-              {isConnected ? 'Connected' : 'Your financial AI helper'}
-            </p>
+            <p className="ai-subtitle">Your financial AI helper</p>
           </div>
         </div>
         <button className="expand-btn" onClick={(e) => { e.stopPropagation(); setIsExpanded(!isExpanded) }}>
@@ -268,7 +81,7 @@ export function AIHelper() {
       {!isExpanded && (
         <div className="ai-preview">
           <div className="ai-message">
-            <p>Hi! I can help you manage your finances. Try asking me about your spending habits or upcoming bills.</p>
+            <p>Hi! I can help you manage your finances. Click to expand and start chatting.</p>
           </div>
           
           <div className="quick-actions">
@@ -278,7 +91,7 @@ export function AIHelper() {
                 className="quick-action-btn" 
                 onClick={(e) => {
                   e.stopPropagation()
-                  handleQuickAction(action.prompt)
+                  setIsExpanded(true)
                 }}
               >
                 {icons[action.icon]}
@@ -290,80 +103,14 @@ export function AIHelper() {
       )}
       
       {isExpanded && (
-        <div className="chat-interface">
-          <div className="chat-messages">
-            {messages.length === 0 && (
-              <div className="chat-welcome">
-                <p>Ask me anything about your finances!</p>
-                <div className="chat-suggestions">
-                  {quickActions.map((action) => (
-                    <button 
-                      key={action.label}
-                      className="suggestion-btn"
-                      onClick={() => sendMessage(action.prompt)}
-                    >
-                      {icons[action.icon]}
-                      <span>{action.label}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-            
-            {messages.map((msg) => (
-              <div key={msg.id} className={`chat-message ${msg.role}`}>
-                {msg.role === 'assistant' && (
-                  <div className="message-avatar">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                      <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z" />
-                    </svg>
-                  </div>
-                )}
-                <div className="message-content">
-                  {msg.content}
-                </div>
-              </div>
-            ))}
-            
-            {isLoading && (
-              <div className="chat-message assistant">
-                <div className="message-avatar">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M12 2a2 2 0 0 1 2 2c0 .74-.4 1.39-1 1.73V7h1a7 7 0 0 1 7 7h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1H2a1 1 0 0 1-1-1v-3a1 1 0 0 1 1-1h1a7 7 0 0 1 7-7h1V5.73c-.6-.34-1-.99-1-1.73a2 2 0 0 1 2-2z" />
-                  </svg>
-                </div>
-                <div className="message-content typing">
-                  <span className="typing-dot"></span>
-                  <span className="typing-dot"></span>
-                  <span className="typing-dot"></span>
-                </div>
-              </div>
-            )}
-            
-            <div ref={messagesEndRef} />
-          </div>
-          
-          <form className="chat-input-form" onSubmit={handleSubmit}>
-            <input
-              ref={inputRef}
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              placeholder="Ask Nim anything..."
-              className="chat-input"
-              disabled={isLoading}
-            />
-            <button 
-              type="submit" 
-              className="chat-send-btn"
-              disabled={!inputValue.trim() || isLoading}
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <line x1="22" y1="2" x2="11" y2="13" />
-                <polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-            </button>
-          </form>
+        <div className="nim-chat-container">
+          <NimChat
+            wsUrl={wsUrl}
+            apiUrl={apiUrl}
+            title="Nim"
+            position="inline"
+            defaultOpen={true}
+          />
         </div>
       )}
     </div>
