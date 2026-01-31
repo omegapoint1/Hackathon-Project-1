@@ -43,42 +43,8 @@ export function ChatPanel({
   const hasError = connectionState === 'error';
 
   return (
-    <div className="nim-panel-enter flex flex-col h-full bg-white rounded-xl shadow-lg overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 bg-white border-b border-nim-cream">
-        <h2 className="font-display text-xl font-medium text-nim-black">{title}</h2>
-        <div className="flex items-center gap-2">
-          {onLogout && (
-            <button
-              onClick={onLogout}
-              className="px-3 py-1.5 text-xs rounded-lg bg-nim-cream hover:bg-nim-cream/80 text-nim-black font-body transition-colors"
-              aria-label="Logout"
-            >
-              Logout
-            </button>
-          )}
-          <button
-            onClick={onClose}
-            className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-nim-cream transition-colors"
-            aria-label="Close chat"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="text-nim-black"
-            >
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
-        </div>
-      </div>
+    <div className="flex flex-col h-full bg-white">
+      {/* Connection status banner */}
 
       {/* Connection status banner */}
       {isReconnecting && (
