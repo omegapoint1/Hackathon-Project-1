@@ -80,7 +80,7 @@ export function LoginPanel({ onLoginSuccess, apiUrl = 'https://api.liminal.cash'
 
   if (step === 'otp') {
     return (
-      <div className="flex flex-col gap-4 p-6 bg-white rounded-2xl shadow-xl max-w-md">
+      <div className="flex flex-col gap-4 p-6 bg-white max-w-md">
         <div>
           <h2 className="font-display text-2xl font-bold text-nim-black">Enter Code</h2>
           <p className="text-sm text-nim-brown/60 mt-1">
@@ -127,7 +127,7 @@ export function LoginPanel({ onLoginSuccess, apiUrl = 'https://api.liminal.cash'
   }
 
   return (
-    <div className="flex flex-col gap-4 p-6 bg-white rounded-2xl shadow-xl max-w-md">
+    <div className="flex flex-col gap-4 p-6 bg-white max-w-md">
       <div>
         <h2 className="font-display text-2xl font-bold text-nim-black">Sign In to Nim</h2>
         <p className="text-sm text-nim-brown/60 mt-1">
