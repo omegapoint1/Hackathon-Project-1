@@ -5,7 +5,7 @@ go 1.23.0
 toolchain go1.23.4
 
 require (
-	github.com/becomeliminal/nim-go-sdk v0.3.0
+	github.com/becomeliminal/nim-go-sdk v0.3.3
 	github.com/joho/godotenv v1.5.1
 )
 

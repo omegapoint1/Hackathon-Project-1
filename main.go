@@ -7,7 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"os"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/becomeliminal/nim-go-sdk/core"
@@ -102,6 +106,9 @@ func main() {
 
 	srv.AddTool(createSpendingAnalyzerTool(liminalExecutor))
 	log.Println("✅ Added custom spending analyzer tool")
+
+	srv.AddTool(createSubscriptionAnalyzerTool(liminalExecutor))
+	log.Println("✅ Added custom subscription analyzer tool")
 
 	// TODO: Add more custom tools here!
 	// Examples:
@@ -346,32 +353,31 @@ func calculateVelocity(transactionCount, days int) string {
 	}
 }
 
-func createSubscriptionAnalyzerTool(liminalExecuter core.ToolExecuter) core.Tool {
+func createSubscriptionAnalyzerTool(liminalExecutor core.ToolExecutor) core.Tool {
 	return tools.New("analyze_subscriptions").
 		Description("Scan Transaction History to identify recurring subscriptions and recurring payments. Returns subscription patters, total month costs, and cancellation insights.").
-		Schema(tools.ObjectScema(map[string]interface{}{
+		Schema(tools.ObjectSchema(map[string]interface{}{
 			"timeframe_months": tools.IntegerProperty("Number of months to analyze for recurring patterns (default:6)"),
-			"min_amount": tools.NumberProperty("Minimum amount to be considered as subscription (default: 1.00)"),
-			"max_amount": tools.NumberProperty("Maximum amount to be considered as a subscription (default: 999.99)"),	
-		}))
-		Handler(func(ctx context.Context, toolParams *core.ToolExecutor) (*core.ToolResult, error){
+			"min_amount":       tools.NumberProperty("Minimum amount to be considered as subscription (default: 1.00)"),
+			"max_amount":       tools.NumberProperty("Maximum amount to be considered as a subscription (default: 999.99)"),
+		})).
+		Handler(func(ctx context.Context, toolParams *core.ToolParams) (*core.ToolResult, error) {
 			var params struct {
 				TimeframeMonths int     `json:"timeframe_months"`
 				MinAmount       float64 `json:"min_amount"`
 				MaxAmount       float64 `json:"max_amount"`
 			}
-			if err:== json.Unmarshal(toolParams.input, &params); err != nil{
+			if err := json.Unmarshal(toolParams.Input, &params); err != nil {
 				return &core.ToolResult{
 					Success: false,
-					Error: fmt.Sprintf("invalid input: %v", err),
-
+					Error:   fmt.Sprintf("invalid input: %v", err),
 				}, nil
 			}
 			//set defaults
-			if params.TimeframeMonths == 0{
+			if params.TimeframeMonths == 0 {
 				params.TimeframeMonths = 6
 			}
-			if params.MinAmount ==0 {
+			if params.MinAmount == 0 {
 				params.MinAmount = 1.00
 			}
 			if params.MaxAmount == 0 {
@@ -381,39 +387,35 @@ func createSubscriptionAnalyzerTool(liminalExecuter core.ToolExecuter) core.Tool
 			now := time.Now()
 			cutoffDate := now.AddDate(0, -params.TimeframeMonths, 0)
 
-			txRequest:= map[string]interface{}{
-				"limit": 500,
+			txRequest := map[string]interface{}{
+				"limit":      500,
 				"start_date": cutoffDate.Format("2006-01-02"),
-
 			}
 			txRequestJSON, _ := json.Marshal(txRequest)
 			txResponse, err := liminalExecutor.Execute(ctx, &core.ExecuteRequest{
-				UserID: toolParams.UserID,
-				Tool: "get_transactions",
-				Input: txRequestJSON,
+				UserID:    toolParams.UserID,
+				Tool:      "get_transactions",
+				Input:     txRequestJSON,
 				RequestID: toolParams.RequestID,
-
 			})
 			if err != nil {
-				return %core.ToolResult{
-					Success: false,
-					Error: fmt.Sprintf("failed to fetch transactions: %v", err),
-
-				}
-			}
-			if !txResponse.Success{
 				return &core.ToolResult{
 					Success: false,
-					Error: fmt.Sprintf("transaction fetch failed :%s", txResponse.Error),
-
+					Error:   fmt.Sprintf("failed to fetch transactions: %v", err),
+				}, nil
+			}
+			if !txResponse.Success {
+				return &core.ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("transaction fetch failed :%s", txResponse.Error),
 				}, nil
 			}
 			var transactions []map[string]interface{}
 			var txData map[string]interface{}
-			if err != json.Unmarshal(txResponse.Data, %txData); err==nil{
-				if txArray,ok := txData["transactions"].([]interface{}); ok {
-					for _, tx := range txArray{
-						if txMap, ok := tx.(map[string]interface{};) ok {
+			if err := json.Unmarshal(txResponse.Data, &txData); err == nil {
+				if txArray, ok := txData["transactions"].([]interface{}); ok {
+					for _, tx := range txArray {
+						if txMap, ok := tx.(map[string]interface{}); ok {
 							transactions = append(transactions, txMap)
 						}
 					}
@@ -421,31 +423,31 @@ func createSubscriptionAnalyzerTool(liminalExecuter core.ToolExecuter) core.Tool
 			}
 			subscriptions := analyzeForSubscriptions(transactions, cutoffDate, params.MinAmount, params.MaxAmount)
 			result := map[string]interface{}{
-				"analysis_period": fmt.Sprintf("%d months", Params.TimeframeMonths),
+				"analysis_period":            fmt.Sprintf("%d months", params.TimeframeMonths),
 				"total_transactions_scanned": len(transactions),
-				"subscriptions_found": len(subscriptions),
-				"subscriptions": subscriptions,
-				"total_monthly_cost": calculateTotalMonthlyCost(subscriptions),
-				"warnings": generateWarnings(subscriptions)
-				"generated_at": now.Format(time.RFC3339),
+				"subscriptions_found":        len(subscriptions),
+				"subscriptions":              subscriptions,
+				"total_monthly_cost":         calculateTotalMonthlyCost(subscriptions),
+				"warnings":                   generateWarnings(subscriptions),
+				"generated_at":               now.Format(time.RFC3339),
 			}
-			return &core.ToolResult {
+			return &core.ToolResult{
 				Success: true,
-				Data: result,
+				Data:    result,
 			}, nil
 
 		}).
-		build()
+		Build()
 }
 
-func analyzeForSubscriptions(transactions []map[string]interface{}, cutoffDate time.Time, minAmount, maxAmount float64) []map[string]interface{}{
-	if len(transactions) == 0{
+func analyzeForSubscriptions(transactions []map[string]interface{}, cutoffDate time.Time, minAmount, maxAmount float64) []map[string]interface{} {
+	if len(transactions) == 0 {
 		return []map[string]interface{}{}
 
 	}
 	type paymentKey struct {
 		merchant string
-		amount string
+		amount   string
 	}
 	paymentGroups := make(map[paymentKey][]time.Time)
 	for _, tx := range transactions {
@@ -454,13 +456,13 @@ func analyzeForSubscriptions(transactions []map[string]interface{}, cutoffDate t
 			continue
 		}
 		amount, _ := tx["amount"].(float64)
-		if amount <minAmount || amount > maxAmount {
+		if amount < minAmount || amount > maxAmount {
 			continue
 		}
 		merchant := "Unknown"
 		if desc, ok := tx["description"].(string); ok && desc != "" {
 			merchant = desc
-		} else if recipient, ok := tx["recipient"].(string); ok && recipient!= ""{
+		} else if recipient, ok := tx["recipient"].(string); ok && recipient != "" {
 			merchant = recipient
 		}
 		txDateStr, ok := tx["date"].(string)
@@ -475,37 +477,35 @@ func analyzeForSubscriptions(transactions []map[string]interface{}, cutoffDate t
 			continue
 		}
 		roundedAmount := fmt.Sprintf("%.2f", amount)
-		key := paymentKey{merchant: merchant,amount:roundedAmount}
+		key := paymentKey{merchant: merchant, amount: roundedAmount}
 		paymentGroups[key] = append(paymentGroups[key], txDate)
 
-		
 	}
-	var Subscriptions []map[string]interface{}
+	var subscriptions []map[string]interface{}
 	for key, dates := range paymentGroups {
-		if len(dates) <2 {
+		if len(dates) < 2 {
 			continue
 		}
-		sort.Slice(dates, func(i,j int) bool {
+		sort.Slice(dates, func(i, j int) bool {
 			return dates[i].Before(dates[j])
 		})
 		intervals := make([]int, 0)
-		for i := 1; i < len(dates); i++{
-			daysBetween := int(dates[i]. Sub(dates[i-1]).Hours()/24)
-			intervals = append(intervals,daysBetween)
+		for i := 1; i < len(dates); i++ {
+			daysBetween := int(dates[i].Sub(dates[i-1]).Hours() / 24)
+			intervals = append(intervals, daysBetween)
 		}
 		if isRegularPattern(intervals) {
 			amount, _ := strconv.ParseFloat(key.amount, 64)
 			frequency := detectFrequency(intervals)
-			subscription:= map[string]interface{}{
-				"merchant": key.merchant,
-				"amount": amount,
-				"frequency": frequency,
-				"occurences": len(dates),
-				"last_occurence": dates[len(dates_-1)].Format("2006-01-02"),
+			subscription := map[string]interface{}{
+				"merchant":       key.merchant,
+				"amount":         amount,
+				"frequency":      frequency,
+				"occurences":     len(dates),
+				"last_occurence": dates[len(dates)-1].Format("2006-01-02"),
 				"estimated_next": estimateNextPayment(dates[len(dates)-1], frequency),
-				"total_paid": amount * float64(len(dates)),
-				"confidence": calcualteConfidence(len(dates), intervals),
-
+				"total_paid":     amount * float64(len(dates)),
+				"confidence":     calculateConfidence(len(dates), intervals),
 			}
 			subscriptions = append(subscriptions, subscription)
 		}
@@ -513,18 +513,18 @@ func analyzeForSubscriptions(transactions []map[string]interface{}, cutoffDate t
 	return subscriptions
 }
 
-func isRegularPattern(intervals []int) bool{
+func isRegularPattern(intervals []int) bool {
 	if len(intervals) == 0 {
 		return false
 	}
 	sum := 0
-	for_, interval := range intervals {
+	for _, interval := range intervals {
 		sum += interval
 	}
-	avg := float(sum) / float64(len(intervals))
+	avg := float64(sum) / float64(len(intervals))
 	withinTolerance := 0
 	tolerance := avg * 0.2
-	for_, interval := range intervals {
+	for _, interval := range intervals {
 		if math.Abs(float64(interval)-avg) <= tolerance {
 			withinTolerance++
 		}
@@ -533,16 +533,16 @@ func isRegularPattern(intervals []int) bool{
 
 }
 
-func detectFrequency(intervals []int) string{
-	if len(intervals) == 0{
+func detectFrequency(intervals []int) string {
+	if len(intervals) == 0 {
 		return "unknown"
 	}
-	sum:= 0
+	sum := 0
 	for _, interval := range intervals {
 		sum += interval
 	}
-	avgDays := float64(sum)/float64(len(intervals))
-	switch{
+	avgDays := float64(sum) / float64(len(intervals))
+	switch {
 	case avgDays >= 25 && avgDays <= 35:
 		return "monthly"
 	case avgDays >= 80 && avgDays <= 100:
@@ -556,94 +556,94 @@ func detectFrequency(intervals []int) string{
 	case avgDays >= 1 && avgDays <= 7:
 		return "week"
 	default:
-		return: "irregular"
+		return "irregular"
 	}
 }
 
-func estimateNextPayment(lastPayment time.Time, frequency string) string{
+func estimateNextPayment(lastPayment time.Time, frequency string) string {
 	switch frequency {
 	case "monthly":
-		return lastpayment.AddDate(0,1,0).format("2006-01-02")
+		return lastPayment.AddDate(0, 1, 0).Format("2006-01-02")
 	case "quarterly":
-		return lastpayment.AddDate(0,3,0).format("2006-01-02")
+		return lastPayment.AddDate(0, 3, 0).Format("2006-01-02")
 	case "semi-annual":
-		return lastpayment.AddDate(0,6,0).format("2006-01-02")
+		return lastPayment.AddDate(0, 6, 0).Format("2006-01-02")
 	case "annual":
-		return lastpayment.AddDate(1,0,0).format("2006-01-02")
-	case "bi-weekly":
-		return lastpayment.AddDate(0,0,14).format("2006-01-02")
-	case "weekly":
-		return lastpayment.AddDate(0,0,7).format("2006-01-02")
+		return lastPayment.AddDate(1, 0, 0).Format("2006-01-02")
+	case "biweekly":
+		return lastPayment.AddDate(0, 0, 14).Format("2006-01-02")
+	case "week":
+		return lastPayment.AddDate(0, 0, 7).Format("2006-01-02")
 	default:
-		return:"unknown"
+		return "unknown"
 	}
 }
 
-func calcualteConfidence(occurences int, intervals[]int) string {
-	if occurences >= 4 && isRegularPattern(intervals){
+func calculateConfidence(occurrences int, intervals []int) string {
+	if occurrences >= 4 && isRegularPattern(intervals) {
 		return "high"
-	} else if occurences >= 3{
-		return"medium"
-	} else{
-		return"low"
+	} else if occurrences >= 3 {
+		return "medium"
+	} else {
+		return "low"
 	}
 
 }
 
 func calculateTotalMonthlyCost(subscriptions []map[string]interface{}) float64 {
 	var totalMonthly float64
-	for _, sub:= range subscriptions{
-		amount,_ := sub["amount"].(float64)
+	for _, sub := range subscriptions {
+		amount, _ := sub["amount"].(float64)
 		frequency, _ := sub["frequency"].(string)
-		switch frequency{
+		switch frequency {
 		case "monthly":
 			totalMonthly += amount
 		case "quarterly":
-			totalMonthly += amount/3
+			totalMonthly += amount / 3
 		case "semi-annual":
-			totalMonthly += amount/6
+			totalMonthly += amount / 6
 		case "annual":
-			totalMonthly += amount/12			
-		case "bi-weekly":
-			totalMonthly += amount*2.167
-		case "weekly":
-			totalMonthly += amount*4.333
+			totalMonthly += amount / 12
+		case "biweekly":
+			totalMonthly += amount * 2.167
+		case "week":
+			totalMonthly += amount * 4.333
 		}
 	}
-	return math.Round(totalMonthly*100)/100
+	return math.Round(totalMonthly*100) / 100
 }
 
-func generateWarnings(subscription []map[string]interface{}) []string {
-	warnings :- make([]string, 0)
+func generateWarnings(subscriptions []map[string]interface{}) []string {
+	warnings := make([]string, 0)
 	if len(subscriptions) == 0 {
 		warnings = append(warnings, "No subscriptions were detected at all in your transaction history.")
 		return warnings
 	}
 	totalMonthly := calculateTotalMonthlyCost(subscriptions)
-	warnings = append(warnings,fmt.Sprintf("You are spending approximately $%.2f per month on subscriptions.", totalMonthly))
+	warnings = append(warnings, fmt.Sprintf("You are spending approximately $%.2f per month on subscriptions.", totalMonthly))
 	merchantCategories := make(map[string][]string)
-	knownPatterns:= map[string][]string{
-		"streaming": {"netflix","hulu","disney","prime","spotify","hbo","apple tv", "youtube premium"},
-		"music": {"spotify", "apply music", "youtube music", "tidal", "pandora"},
-		"cloud": {"dropbox", "google one",  "icloud", "onedrive"},
-		"fitness": {"peloton", "classpass", "apple fitness", "strava"},
+	knownPatterns := map[string][]string{
+		"streaming": {"netflix", "hulu", "disney", "prime", "spotify", "hbo", "apple tv", "youtube premium"},
+		"music":     {"spotify", "apply music", "youtube music", "tidal", "pandora"},
+		"cloud":     {"dropbox", "google one", "icloud", "onedrive"},
+		"fitness":   {"peloton", "classpass", "apple fitness", "strava"},
 	}
-	for _, sub := range subscriptions{
+	for _, sub := range subscriptions {
 		merchant, _ := sub["merchant"].(string)
 		merchantLower := strings.ToLower(merchant)
-		for category, keyworkds := rnage knownPatterns {
+		for category, keywords := range knownPatterns {
 			for _, keyword := range keywords {
-				if strings.Contains(merchantLower, keyword){
+				if strings.Contains(merchantLower, keyword) {
 					merchantCategories[category] = append(merchantCategories[category], merchant)
 					break
 				}
 
 			}
 		}
-		
+
 	}
 	for category, merchants := range merchantCategories {
-		if len(merchants) >1 {
+		if len(merchants) > 1 {
 			warnings = append(warnings, fmt.Sprintf("you have multiple %s subscriptions. %s Consider consolidating.", category, strings.Join(merchants, ",")))
 		}
 	}
@@ -652,19 +652,20 @@ func generateWarnings(subscription []map[string]interface{}) []string {
 		occurences, _ := sub["occurences"].(int)
 		lastDatestr, _ := sub["last_occurence"].(string)
 		lastDate, err := time.Parse("2006-01-02", lastDatestr)
-		if err == nil && occurences <3 && now.Sub(lastDate).hours()/24 >90{
+		if err == nil && occurences < 3 && now.Sub(lastDate).Hours()/24 > 90 {
 			merchant, _ := sub["merchant"].(string)
-			warnings = append(warnings,fmt.Sprintf("Subscription to '%s' seems inactive (last paid %s). Consider cancelling if you no longer use.", merchant, lastDatestr))
+			warnings = append(warnings, fmt.Sprintf("Subscription to '%s' seems inactive (last paid %s). Consider cancelling if you no longer use.", merchant, lastDatestr))
 
 		}
 	}
-	if totalMonthly > 50{
-		savings := math.Round(totalMonthly*0.1*100)/100
-		warnings = append(warnings,fmt.Sprintf("Tip: Cancelling just 10%% of your subscriptions can possibly save you $%.2f monthly!", savings))
+	if totalMonthly > 50 {
+		savings := math.Round(totalMonthly*0.1*100) / 100
+		warnings = append(warnings, fmt.Sprintf("Tip: Cancelling just 10%% of your subscriptions can possibly save you $%.2f monthly!", savings))
 
 	}
 	return warnings
 }
+
 // ============================================================================
 // HACKATHON IDEAS
 // ============================================================================
