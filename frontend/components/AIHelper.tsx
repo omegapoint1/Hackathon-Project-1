@@ -25,8 +25,8 @@ export function AIHelper({ wsUrl, title = 'Nim' }: AIHelperProps) {
   });
 
   return (
-    <div className="ai-helper">
-      <div className="section-card">
+    <div className="ai-helper h-full">
+      <div className="section-card h-full flex flex-col">
         <div className="ai-header">
           <h3 className="section-title">AI Assistant</h3>
           <div className="ai-status">
@@ -49,7 +49,7 @@ export function AIHelper({ wsUrl, title = 'Nim' }: AIHelperProps) {
           </div>
         </div>
         
-        <div className="ai-content">
+        <div className="ai-content flex-1 min-h-0">
           <ChatPanel
             title={title}
             messages={messages}
