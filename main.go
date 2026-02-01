@@ -1,3 +1,4 @@
+
 // Hackathon Starter: Complete AI Financial Agent
 // Build intelligent financial tools with nim-go-sdk + Liminal banking APIs
 package main
@@ -26,11 +27,7 @@ func main() {
 	// ============================================================================
 	// CONFIGURATION
 	// ============================================================================
-	// Load .env file if it exists (optional - will use system env vars if not found)
 	_ = godotenv.Load()
-
-	// Load configuration from environment variables
-	// Create a .env file or export these in your shell
 
 	anthropicKey := os.Getenv("ANTHROPIC_API_KEY")
 	if anthropicKey == "" {
@@ -47,77 +44,69 @@ func main() {
 		port = "8080"
 	}
 
-	// ============================================================================
-	// LIMINAL EXECUTOR SETUP
-	// ============================================================================
-	// The HTTPExecutor handles all API calls to Liminal banking services.
-	// Authentication flow: User logs in via frontend → JWT stored → WebSocket extracts JWT → Forwarded to Liminal API
-	// No API key needed - JWT tokens from the frontend login flow (email/OTP) handle auth automatically
-
-	liminalExecutor := executor.NewHTTPExecutor(executor.HTTPExecutorConfig{
-		BaseURL: liminalBaseURL,
-	})
-	log.Println("✅ Liminal API configured")
+	useMock := os.Getenv("USE_MOCK") == "true"
 
 	// ============================================================================
 	// SERVER SETUP
 	// ============================================================================
-	// Create the nim-go-sdk server with Claude AI
-	// The server handles WebSocket connections and manages conversations
-	// Authentication is automatic: JWT tokens from the login flow are extracted
-	// from WebSocket connections and forwarded to Liminal API calls
+	// In mock mode we omit LiminalExecutor from the config entirely — the SDK
+	// only needs it to forward JWTs to the real Liminal API, which we skip.
 
-	srv, err := server.New(server.Config{
-		AnthropicKey:    anthropicKey,
-		SystemPrompt:    hackathonSystemPrompt,
-		Model:           "claude-sonnet-4-20250514",
-		MaxTokens:       4096,
-		LiminalExecutor: liminalExecutor, // SDK automatically handles JWT extraction and forwarding
-	})
+	cfg := server.Config{
+		AnthropicKey: anthropicKey,
+		SystemPrompt: hackathonSystemPrompt,
+		Model:        "claude-sonnet-4-20250514",
+		MaxTokens:    4096,
+	}
+
+	if !useMock {
+		httpExec := executor.NewHTTPExecutor(executor.HTTPExecutorConfig{
+			BaseURL: liminalBaseURL,
+		})
+		cfg.LiminalExecutor = httpExec
+		log.Println("✅ Liminal API configured (live)")
+	} else {
+		log.Println("✅ Using MOCK executor (USE_MOCK=true)")
+	}
+
+	srv, err := server.New(cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	// ============================================================================
-	// ADD LIMINAL BANKING TOOLS
+	// ADD BANKING TOOLS
 	// ============================================================================
-	// These are the 9 core Liminal tools that give your AI access to real banking:
-	//
-	// READ OPERATIONS (no confirmation needed):
-	//   1. get_balance - Check wallet balance
-	//   2. get_savings_balance - Check savings positions and APY
-	//   3. get_vault_rates - Get current savings rates
-	//   4. get_transactions - View transaction history
-	//   5. get_profile - Get user profile info
-	//   6. search_users - Find users by display tag
-	//
-	// WRITE OPERATIONS (require user confirmation):
-	//   7. send_money - Send money to another user
-	//   8. deposit_savings - Deposit funds into savings
-	//   9. withdraw_savings - Withdraw funds from savings
 
-	srv.AddTools(tools.LiminalTools(liminalExecutor)...)
-	log.Println("✅ Added 9 Liminal banking tools")
+	if useMock {
+		// Register all 9 tools manually via the tools.New() builder so we never
+		// touch the concrete *executor.HTTPExecutor type.
+		srv.AddTools(mockLiminalTools()...)
+		log.Println("✅ Added 9 mock Liminal banking tools")
+	} else {
+		srv.AddTools(tools.LiminalTools(cfg.LiminalExecutor)...)
+		log.Println("✅ Added 9 Liminal banking tools")
+	}
 
 	// ============================================================================
 	// ADD CUSTOM TOOLS
 	// ============================================================================
-	// This is where you'll add your hackathon project's custom tools!
-	// Below are example analyzer tools to get you started.
+	// The custom tools accept core.ToolExecutor (interface).  In mock mode we
+	// pass a *mockExecutor; in live mode we pass the HTTPExecutor (which also
+	// satisfies the interface).
 
-	srv.AddTool(createSpendingAnalyzerTool(liminalExecutor))
+	var customExec core.ToolExecutor
+	if useMock {
+		customExec = &mockExecutor{}
+	} else {
+		customExec = cfg.LiminalExecutor
+	}
+
+	srv.AddTool(createSpendingAnalyzerTool(customExec))
 	log.Println("✅ Added custom spending analyzer tool")
 
-	srv.AddTool(createSubscriptionAnalyzerTool(liminalExecutor))
+	srv.AddTool(createSubscriptionAnalyzerTool(customExec))
 	log.Println("✅ Added custom subscription analyzer tool")
-
-	// TODO: Add more custom tools here!
-	// Examples:
-	//   - Savings goal tracker
-	//   - Budget alerts
-	//   - Spending category analyzer
-	//   - Bill payment predictor
-	//   - Cash flow forecaster
 
 	// ============================================================================
 	// START SERVER
@@ -140,8 +129,6 @@ func main() {
 // ============================================================================
 // SYSTEM PROMPT
 // ============================================================================
-// This prompt defines your AI agent's personality and behavior
-// Customize this to match your hackathon project's focus!
 
 const hackathonSystemPrompt = `You are Nim, a friendly AI financial assistant built for the Liminal Vibe Banking Hackathon.
 
@@ -183,7 +170,6 @@ AVAILABLE BANKING TOOLS:
 
 CUSTOM ANALYTICAL TOOLS:
 - Analyze spending patterns (analyze_spending)
-- Detect subscriptions (analyze_subscriptions)
 
 TIPS FOR GREAT INTERACTIONS:
 - Proactively suggest relevant actions ("Want me to move some to savings?")
@@ -195,269 +181,496 @@ TIPS FOR GREAT INTERACTIONS:
 Remember: You're here to make banking delightful and help users build better financial habits!`
 
 // ============================================================================
-// MOCK DATA GENERATORS
+// MOCK EXECUTOR  –  satisfies core.ToolExecutor for the custom analyzer tools
 // ============================================================================
 
-// generateMockTransactionsForAnalysis creates realistic transaction data for testing
-// Useful for demo purposes without needing real user data
-func generateMockTransactionsForAnalysis(days int) []map[string]interface{} {
-	rand.Seed(time.Now().UnixNano())
-	now := time.Now()
-	transactions := []map[string]interface{}{}
+type mockExecutor struct{}
 
-	// Transaction templates - realistic merchant names and amounts
-	templates := []struct {
-		description string
-		amount      float64
-		txType      string
-	}{
-		// Food & Dining
-		{"Starbucks Coffee", 8.50, "send"},
-		{"Chipotle Mexican Grill", 15.75, "send"},
-		{"Whole Foods Market", 67.30, "send"},
-		{"DoorDash - Pizza Delivery", 32.50, "send"},
-		{"Local Coffee Shop", 6.25, "send"},
-		// Transportation
-		{"Uber Ride", 18.50, "send"},
-		{"Gas Station", 45.00, "send"},
-		{"Lyft Ride", 22.75, "send"},
-		{"Metro Card Reload", 30.00, "send"},
-		// Shopping
-		{"Amazon.com", 89.99, "send"},
-		{"Target Store", 54.25, "send"},
-		{"Nike Store", 125.00, "send"},
-		// Entertainment
-		{"Netflix Subscription", 15.99, "send"},
-		{"Spotify Premium", 10.99, "send"},
-		{"Movie Theater", 28.50, "send"},
-		{"Steam Games", 59.99, "send"},
-		// Bills
-		{"Electric Bill Payment", 125.50, "send"},
-		{"Internet Service", 79.99, "send"},
-		{"Phone Bill", 65.00, "send"},
-		// Income
-		{"Payroll Deposit", 2500.00, "receive"},
-		{"Freelance Payment", 450.00, "receive"},
-		{"Refund from Amazon", 29.99, "receive"},
-		{"Payment from @alice", 75.00, "receive"},
-	}
+var _ core.ToolExecutor = (*mockExecutor)(nil)
 
-	// Generate 30-40 transactions spread over the time period
-	numTxs := 30 + rand.Intn(11)
-	for i := 0; i < numTxs; i++ {
-		template := templates[rand.Intn(len(templates))]
-		daysAgo := rand.Intn(days)
-		txDate := now.AddDate(0, 0, -daysAgo)
-
-		// Add variance to amounts (80% - 120%) to make it more realistic
-		variance := 0.8 + rand.Float64()*0.4
-		amount := math.Round(template.amount*variance*100) / 100
-
-		transactions = append(transactions, map[string]interface{}{
-			"id":          fmt.Sprintf("tx_mock_%d", i),
-			"type":        template.txType,
-			"amount":      amount,
-			"description": template.description,
-			"date":        txDate.Format(time.RFC3339),
-			"status":      "completed",
-			"currency":    "USD",
-		})
-	}
-
-	return transactions
+// READ EXECUTION (safe tools: get_balance, get_transactions, etc.)
+func (m *mockExecutor) Execute(
+	_ context.Context,
+	req *core.ExecuteRequest,
+) (*core.ExecuteResponse, error) {
+	return m.runMockTool(req)
 }
 
-// generateMockSubscriptionTransactions creates recurring payment patterns for subscription detection
-func generateMockSubscriptionTransactions(months int) []map[string]interface{} {
-	rand.Seed(time.Now().UnixNano())
-	now := time.Now()
-	transactions := []map[string]interface{}{}
+// WRITE EXECUTION (money-moving tools: send_money, deposit, withdraw)
+func (m *mockExecutor) ExecuteWrite(
+	_ context.Context,
+	req *core.ExecuteRequest,
+) (*core.ExecuteResponse, error) {
+	return m.runMockTool(req)
+}
 
-	// Subscription templates with recurring patterns
-	subscriptions := []struct {
-		merchant  string
-		amount    float64
-		frequency int // days between payments
-	}{
-		{"Netflix Subscription", 15.99, 30},
-		{"Spotify Premium", 10.99, 30},
-		{"Amazon Prime", 14.99, 30},
-		{"Adobe Creative Cloud", 54.99, 30},
-		{"Planet Fitness", 24.99, 30},
-		{"New York Times Digital", 17.00, 30},
-		{"Hulu (No Ads)", 17.99, 30},
-		{"iCloud Storage 200GB", 2.99, 30},
-		{"GitHub Pro", 7.00, 30},
-		{"Dropbox Plus", 11.99, 30},
-	}
+// Shared tool router
+func (m *mockExecutor) runMockTool(
+	req *core.ExecuteRequest,
+) (*core.ExecuteResponse, error) {
 
-	// Add some irregular subscriptions
-	irregularSubs := []struct {
-		merchant  string
-		amount    float64
-		frequency int
-	}{
-		{"Annual Software License", 299.00, 365},
-		{"Quarterly Insurance", 450.00, 90},
-		{"Biweekly Meal Delivery", 89.99, 14},
-	}
+	var result *core.ToolResult
+	var err error
 
-	subscriptions = append(subscriptions, irregularSubs...)
+	switch req.Tool {
 
-	// Select 5-8 random subscriptions for this user
-	numSubs := 5 + rand.Intn(4)
-	selectedSubs := make([]struct {
-		merchant  string
-		amount    float64
-		frequency int
-	}, numSubs)
-	for i := 0; i < numSubs; i++ {
-		selectedSubs[i] = subscriptions[rand.Intn(len(subscriptions))]
-	}
+	// ---------- READ ----------
+	case "get_balance":
+		result, err = mockGetBalance()
 
-	// Generate recurring transactions for each subscription
-	daysToGenerate := months * 30
-	for _, sub := range selectedSubs {
-		numOccurrences := daysToGenerate / sub.frequency
-		for j := 0; j < numOccurrences; j++ {
-			daysAgo := j * sub.frequency
-			if daysAgo > daysToGenerate {
-				break
-			}
+	case "get_savings_balance":
+		result, err = mockGetSavingsBalance()
 
-			txDate := now.AddDate(0, 0, -daysAgo)
-			// Add small variance to amounts (±2%) to simulate real-world pricing variations
-			variance := 0.98 + rand.Float64()*0.04
-			amount := math.Round(sub.amount*variance*100) / 100
+	case "get_vault_rates":
+		result, err = mockGetVaultRates()
 
-			transactions = append(transactions, map[string]interface{}{
-				"id":          fmt.Sprintf("tx_sub_%s_%d", sub.merchant, j),
-				"type":        "send",
-				"amount":      amount,
-				"description": sub.merchant,
-				"date":        txDate.Format(time.RFC3339),
-				"status":      "completed",
-				"currency":    "USD",
-			})
+	case "get_transactions":
+		result, err = mockGetTransactions(req.Input)
+
+	case "get_profile":
+		result, err = mockGetProfile()
+
+	case "search_users":
+		result, err = mockSearchUsers()
+
+	// ---------- WRITE ----------
+	case "send_money":
+		result, err = mockSendMoney(req.Input)
+
+	case "deposit_savings":
+		result, err = mockDepositSavings(req.Input)
+
+	case "withdraw_savings":
+		result, err = mockWithdrawSavings(req.Input)
+
+	default:
+		result = &core.ToolResult{
+			Success: false,
+			Error:   fmt.Sprintf("mock: unknown tool %q", req.Tool),
 		}
 	}
 
-	// Add some one-time purchases to make the data more realistic
-	oneTimePurchases := []string{
-		"Whole Foods Market",
-		"Target Store",
-		"Uber Ride",
-		"Amazon.com",
-		"Starbucks Coffee",
-		"Gas Station",
+	if err != nil {
+		return nil, err
 	}
 
-	for i := 0; i < 20; i++ {
-		purchase := oneTimePurchases[rand.Intn(len(oneTimePurchases))]
-		daysAgo := rand.Intn(daysToGenerate)
-		txDate := now.AddDate(0, 0, -daysAgo)
-		amount := 10.00 + rand.Float64()*90.00
+	// ToolResult.Data is already []byte from json.Marshal
+	raw, ok := result.Data.(json.RawMessage)
+	if !ok {
+		// If it's actually []byte, convert safely
+		if b, ok2 := result.Data.([]byte); ok2 {
+			raw = json.RawMessage(b)
+		} else {
+			raw = json.RawMessage(`{}`)
+		}
+	}
 
-		transactions = append(transactions, map[string]interface{}{
-			"id":          fmt.Sprintf("tx_once_%d", i),
-			"type":        "send",
-			"amount":      math.Round(amount*100) / 100,
-			"description": purchase,
-			"date":        txDate.Format(time.RFC3339),
-			"status":      "completed",
-			"currency":    "USD",
+	return &core.ExecuteResponse{
+		Success: result.Success,
+		Error:   result.Error,
+		Data:    raw,
+	}, nil
+}
+
+// CANCEL
+func (m *mockExecutor) Cancel(
+	_ context.Context,
+	_ string,
+	_ string,
+) error {
+	return nil
+}
+
+// CONFIRM
+func (m *mockExecutor) Confirm(
+	_ context.Context,
+	_ string,
+	_ string,
+) (*core.ExecuteResponse, error) {
+	return &core.ExecuteResponse{
+		Success: true,
+		Data:    json.RawMessage(`{"confirmed": true}`),
+	}, nil
+}
+
+// ============================================================================
+// MOCK TOOL REGISTRATION  –  the 9 Liminal tools built with tools.New()
+// ============================================================================
+
+func mockLiminalTools() []core.Tool {
+	return []core.Tool{
+		tools.New("get_balance").
+			Description("Check the user's current wallet balance.").
+			Schema(tools.ObjectSchema(map[string]interface{}{})).
+			Handler(func(_ context.Context, _ *core.ToolParams) (*core.ToolResult, error) {
+				return mockGetBalance()
+			}).Build(),
+
+		tools.New("get_savings_balance").
+			Description("Check the user's savings balance and APY.").
+			Schema(tools.ObjectSchema(map[string]interface{}{})).
+			Handler(func(_ context.Context, _ *core.ToolParams) (*core.ToolResult, error) {
+				return mockGetSavingsBalance()
+			}).Build(),
+
+		tools.New("get_vault_rates").
+			Description("Get current savings vault rates and APY.").
+			Schema(tools.ObjectSchema(map[string]interface{}{})).
+			Handler(func(_ context.Context, _ *core.ToolParams) (*core.ToolResult, error) {
+				return mockGetVaultRates()
+			}).Build(),
+
+		tools.New("get_transactions").
+			Description("View the user's transaction history.").
+			Schema(tools.ObjectSchema(map[string]interface{}{
+				"limit":      tools.IntegerProperty("Max number of transactions to return (default: 20)"),
+				"start_date": tools.StringProperty("Filter transactions after this date (YYYY-MM-DD)"),
+			})).
+			Handler(func(_ context.Context, tp *core.ToolParams) (*core.ToolResult, error) {
+				return mockGetTransactions(tp.Input)
+			}).Build(),
+
+		tools.New("get_profile").
+			Description("Get the user's profile information.").
+			Schema(tools.ObjectSchema(map[string]interface{}{})).
+			Handler(func(_ context.Context, _ *core.ToolParams) (*core.ToolResult, error) {
+				return mockGetProfile()
+			}).Build(),
+
+		tools.New("search_users").
+			Description("Search for users by display tag.").
+			Schema(tools.ObjectSchema(map[string]interface{}{
+				"query": tools.StringProperty("The user tag or name to search for"),
+			})).
+			Handler(func(_ context.Context, _ *core.ToolParams) (*core.ToolResult, error) {
+				return mockSearchUsers()
+			}).Build(),
+
+		tools.New("send_money").
+			Description("Send money to another user. Requires confirmation.").
+			Schema(tools.ObjectSchema(map[string]interface{}{
+				"recipient": tools.StringProperty("Recipient user tag (e.g. @alice)"),
+				"amount":    tools.NumberProperty("Amount to send"),
+				"currency":  tools.StringProperty("Currency code (default: USD)"),
+			})).
+			Handler(func(_ context.Context, tp *core.ToolParams) (*core.ToolResult, error) {
+				return mockSendMoney(tp.Input)
+			}).Build(),
+
+		tools.New("deposit_savings").
+			Description("Deposit funds into savings. Requires confirmation.").
+			Schema(tools.ObjectSchema(map[string]interface{}{
+				"amount":   tools.NumberProperty("Amount to deposit"),
+				"currency": tools.StringProperty("Currency code (default: USD)"),
+			})).
+			Handler(func(_ context.Context, tp *core.ToolParams) (*core.ToolResult, error) {
+				return mockDepositSavings(tp.Input)
+			}).Build(),
+
+		tools.New("withdraw_savings").
+			Description("Withdraw funds from savings. Requires confirmation.").
+			Schema(tools.ObjectSchema(map[string]interface{}{
+				"amount":   tools.NumberProperty("Amount to withdraw"),
+				"currency": tools.StringProperty("Currency code (default: USD)"),
+			})).
+			Handler(func(_ context.Context, tp *core.ToolParams) (*core.ToolResult, error) {
+				return mockWithdrawSavings(tp.Input)
+			}).Build(),
+	}
+}
+
+// ============================================================================
+// MOCK RESPONSES  –  match frontend mockBankingData.ts exactly
+// ============================================================================
+
+func mockGetBalance() (*core.ToolResult, error) {
+	return toToolResult(map[string]interface{}{
+		"balance":  2847.50,
+		"currency": "USD",
+	})
+}
+
+func mockGetSavingsBalance() (*core.ToolResult, error) {
+	return toToolResult(map[string]interface{}{
+		"balance":  15420.30,
+		"currency": "USD",
+		"apy":      4.5,
+		"positions": []map[string]interface{}{
+			{"vault_id": "vault_usd_1", "balance": 15420.30, "apy": 4.5},
+		},
+	})
+}
+
+func mockGetVaultRates() (*core.ToolResult, error) {
+	return toToolResult(map[string]interface{}{
+		"rates": []map[string]interface{}{
+			{"vault_id": "vault_usd_1", "apy": 4.5, "currency": "USD"},
+		},
+	})
+}
+
+func mockGetProfile() (*core.ToolResult, error) {
+	return toToolResult(map[string]interface{}{
+		"id":         "user_mock_123",
+		"email":      "demo@liminal.cash",
+		"name":       "Demo User",
+		"created_at": time.Now().AddDate(0, 0, -90).Format(time.RFC3339),
+		"verified":   true,
+	})
+}
+
+func mockSearchUsers() (*core.ToolResult, error) {
+	return toToolResult(map[string]interface{}{
+		"users": []map[string]interface{}{
+			{"id": "user_mock_456", "name": "Alice", "tag": "@alice"},
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// transactions  –  same templates & variance logic as the TS mock
+// ---------------------------------------------------------------------------
+
+var mockTxTemplates = []struct {
+	Description string
+	Amount      float64
+	Type        string // send | receive | deposit | withdrawal
+}{
+	{"Starbucks Coffee", 8.50, "send"},
+	{"Chipotle Mexican Grill", 15.75, "send"},
+	{"Whole Foods Market", 67.30, "send"},
+	{"DoorDash - Pizza Delivery", 32.50, "send"},
+	{"Local Coffee Shop", 6.25, "send"},
+	{"Uber Ride", 18.50, "send"},
+	{"Gas Station", 45.00, "send"},
+	{"Lyft Ride", 22.75, "send"},
+	{"Metro Card Reload", 30.00, "send"},
+	{"Amazon.com", 89.99, "send"},
+	{"Target Store", 54.25, "send"},
+	{"Nike Store", 125.00, "send"},
+	{"Netflix Subscription", 15.99, "send"},
+	{"Spotify Premium", 10.99, "send"},
+	{"Movie Theater", 28.50, "send"},
+	{"Steam Games", 59.99, "send"},
+	{"Electric Bill Payment", 125.50, "send"},
+	{"Internet Service", 79.99, "send"},
+	{"Phone Bill", 65.00, "send"},
+	{"Payroll Deposit", 2500.00, "receive"},
+	{"Freelance Payment", 450.00, "receive"},
+	{"Refund from Amazon", 29.99, "receive"},
+	{"Payment from @alice", 75.00, "receive"},
+	{"Savings Deposit", 200.00, "deposit"},
+	{"Savings Withdrawal", 100.00, "withdrawal"},
+}
+
+func mockGetTransactions(input json.RawMessage) (*core.ToolResult, error) {
+	var params struct {
+		Limit     int    `json:"limit"`
+		StartDate string `json:"start_date"`
+	}
+	_ = json.Unmarshal(input, &params)
+	if params.Limit == 0 {
+		params.Limit = 20
+	}
+
+	r := rand.New(rand.NewSource(42)) // fixed seed → deterministic every time
+	now := time.Now()
+
+	var cutoff time.Time
+	if params.StartDate != "" {
+		if t, err := time.Parse("2006-01-02", params.StartDate); err == nil {
+			cutoff = t
+		}
+	}
+
+	type tx struct {
+		ID           string  `json:"id"`
+		Amount       float64 `json:"amount"`
+		Currency     string  `json:"currency"`
+		Type         string  `json:"type"`
+		Status       string  `json:"status"`
+		Description  string  `json:"description"`
+		Date         string  `json:"date"`
+		CreatedAt    string  `json:"created_at"`
+		Counterparty string  `json:"counterparty,omitempty"`
+	}
+
+	var txs []tx
+	for i := 0; i < 40 && len(txs) < params.Limit; i++ {
+		tmpl := mockTxTemplates[r.Intn(len(mockTxTemplates))]
+		daysAgo := r.Intn(30)
+		createdAt := now.AddDate(0, 0, -daysAgo)
+
+		if !cutoff.IsZero() && createdAt.Before(cutoff) {
+			continue
+		}
+
+		// 80–120 % variance, same as TS mock
+		variance := 0.8 + r.Float64()*0.4
+		amount := math.Round(tmpl.Amount*variance*100) / 100
+
+		cp := ""
+		if tmpl.Type == "receive" && r.Float64() > 0.5 {
+			cp = "@alice"
+		}
+
+		txs = append(txs, tx{
+			ID:           fmt.Sprintf("tx_mock_%d_%d", i, now.UnixMilli()),
+			Amount:       amount,
+			Currency:     "USD",
+			Type:         tmpl.Type,
+			Status:       "completed",
+			Description:  tmpl.Description,
+			Date:         createdAt.Format(time.RFC3339),
+			CreatedAt:    createdAt.Format(time.RFC3339),
+			Counterparty: cp,
 		})
 	}
 
-	return transactions
+	return toToolResult(map[string]interface{}{
+		"transactions": txs,
+		"total":        len(txs),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// write operations  –  echo back a completed transaction
+// ---------------------------------------------------------------------------
+
+func mockSendMoney(input json.RawMessage) (*core.ToolResult, error) {
+	var p struct {
+		Recipient string  `json:"recipient"`
+		Amount    float64 `json:"amount"`
+		Currency  string  `json:"currency"`
+	}
+	_ = json.Unmarshal(input, &p)
+	if p.Currency == "" {
+		p.Currency = "USD"
+	}
+	return toToolResult(map[string]interface{}{
+		"transaction_id": fmt.Sprintf("tx_mock_send_%d", time.Now().UnixMilli()),
+		"status":         "completed",
+		"amount":         p.Amount,
+		"currency":       p.Currency,
+		"recipient":      p.Recipient,
+		"created_at":     time.Now().Format(time.RFC3339),
+	})
+}
+
+func mockDepositSavings(input json.RawMessage) (*core.ToolResult, error) {
+	var p struct {
+		Amount   float64 `json:"amount"`
+		Currency string  `json:"currency"`
+	}
+	_ = json.Unmarshal(input, &p)
+	if p.Currency == "" {
+		p.Currency = "USD"
+	}
+	return toToolResult(map[string]interface{}{
+		"transaction_id":      fmt.Sprintf("tx_mock_dep_%d", time.Now().UnixMilli()),
+		"status":              "completed",
+		"amount":              p.Amount,
+		"currency":            p.Currency,
+		"new_savings_balance": 15420.30 + p.Amount,
+		"created_at":          time.Now().Format(time.RFC3339),
+	})
+}
+
+func mockWithdrawSavings(input json.RawMessage) (*core.ToolResult, error) {
+	var p struct {
+		Amount   float64 `json:"amount"`
+		Currency string  `json:"currency"`
+	}
+	_ = json.Unmarshal(input, &p)
+	if p.Currency == "" {
+		p.Currency = "USD"
+	}
+	return toToolResult(map[string]interface{}{
+		"transaction_id":      fmt.Sprintf("tx_mock_wd_%d", time.Now().UnixMilli()),
+		"status":              "completed",
+		"amount":              p.Amount,
+		"currency":            p.Currency,
+		"new_savings_balance": 15420.30 - p.Amount,
+		"created_at":          time.Now().Format(time.RFC3339),
+	})
+}
+
+func toToolResult(v interface{}) (*core.ToolResult, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return &core.ToolResult{Success: false, Error: err.Error()}, nil
+	}
+	return &core.ToolResult{Success: true, Data: data}, nil
 }
 
 // ============================================================================
 // CUSTOM TOOL: SPENDING ANALYZER
 // ============================================================================
 
-// createSpendingAnalyzerTool builds a tool that analyzes spending patterns
-// Returns insights on categories, velocity, and cash flow
 func createSpendingAnalyzerTool(liminalExecutor core.ToolExecutor) core.Tool {
 	return tools.New("analyze_spending").
-		Description("Analyze the user's spending patterns over a specified time period. Returns insights about spending velocity, categories, and trends. Uses mock data by default for demo purposes.").
+		Description("Analyze the user's spending patterns over a specified time period. Returns insights about spending velocity, categories, and trends.").
 		Schema(tools.ObjectSchema(map[string]interface{}{
-			"days":     tools.IntegerProperty("Number of days to analyze (default: 30)"),
-			"use_mock": tools.BoolProperty("Use mock data for testing (default: true)"),
+			"days": tools.IntegerProperty("Number of days to analyze (default: 30)"),
 		})).
 		Handler(func(ctx context.Context, toolParams *core.ToolParams) (*core.ToolResult, error) {
-			// Parse input parameters
 			var params struct {
-				Days    int  `json:"days"`
-				UseMock bool `json:"use_mock"`
+				Days int `json:"days"`
 			}
 			if err := json.Unmarshal(toolParams.Input, &params); err != nil {
-				// Default to mock mode
-				params.UseMock = true
-				params.Days = 30
+				return &core.ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("invalid input: %v", err),
+				}, nil
 			}
 
-			// Default to 30 days if not specified
 			if params.Days == 0 {
 				params.Days = 30
 			}
 
+			txRequest := map[string]interface{}{
+				"limit": 100,
+			}
+			txRequestJSON, _ := json.Marshal(txRequest)
+
+			txResponse, err := liminalExecutor.Execute(ctx, &core.ExecuteRequest{
+				UserID:    toolParams.UserID,
+				Tool:      "get_transactions",
+				Input:     txRequestJSON,
+				RequestID: toolParams.RequestID,
+			})
+			if err != nil {
+				return &core.ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("failed to fetch transactions: %v", err),
+				}, nil
+			}
+
+			if !txResponse.Success {
+				return &core.ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("transaction fetch failed: %s", txResponse.Error),
+				}, nil
+			}
+
 			var transactions []map[string]interface{}
-
-			// STEP 1: Get transaction data (mock or real)
-			if params.UseMock {
-				// Generate mock transactions
-				transactions = generateMockTransactionsForAnalysis(params.Days)
-				log.Printf("📊 Generated %d mock transactions for analysis", len(transactions))
-			} else {
-				// Fetch real transactions from Liminal API
-				txRequest := map[string]interface{}{
-					"limit": 100,
-				}
-				txRequestJSON, _ := json.Marshal(txRequest)
-
-				txResponse, err := liminalExecutor.Execute(ctx, &core.ExecuteRequest{
-					UserID:    toolParams.UserID,
-					Tool:      "get_transactions",
-					Input:     txRequestJSON,
-					RequestID: toolParams.RequestID,
-				})
-				if err != nil {
-					return &core.ToolResult{
-						Success: false,
-						Error:   fmt.Sprintf("failed to fetch transactions: %v", err),
-					}, nil
-				}
-
-				if !txResponse.Success {
-					return &core.ToolResult{
-						Success: false,
-						Error:   fmt.Sprintf("transaction fetch failed: %s", txResponse.Error),
-					}, nil
-				}
-
-				// Parse transaction data
-				var txData map[string]interface{}
-				if err := json.Unmarshal(txResponse.Data, &txData); err == nil {
-					if txArray, ok := txData["transactions"].([]interface{}); ok {
-						for _, tx := range txArray {
-							if txMap, ok := tx.(map[string]interface{}); ok {
-								transactions = append(transactions, txMap)
-							}
+			var txData map[string]interface{}
+			if err := json.Unmarshal(txResponse.Data, &txData); err == nil {
+				if txArray, ok := txData["transactions"].([]interface{}); ok {
+					for _, tx := range txArray {
+						if txMap, ok := tx.(map[string]interface{}); ok {
+							transactions = append(transactions, txMap)
 						}
 					}
 				}
 			}
 
-			// STEP 2: Analyze the data
 			analysis := analyzeTransactions(transactions, params.Days)
 
-			// STEP 3: Return insights
 			result := map[string]interface{}{
 				"period_days":        params.Days,
 				"total_transactions": len(transactions),
 				"analysis":           analysis,
-				"data_source":        map[string]bool{"is_mock": params.UseMock},
 				"generated_at":       time.Now().Format(time.RFC3339),
 			}
 
@@ -469,8 +682,6 @@ func createSpendingAnalyzerTool(liminalExecutor core.ToolExecutor) core.Tool {
 		Build()
 }
 
-// analyzeTransactions processes transaction data and returns spending insights
-// Calculates totals, categories, velocity, and generates actionable insights
 func analyzeTransactions(transactions []map[string]interface{}, days int) map[string]interface{} {
 	if len(transactions) == 0 {
 		return map[string]interface{}{
@@ -478,25 +689,17 @@ func analyzeTransactions(transactions []map[string]interface{}, days int) map[st
 		}
 	}
 
-	// Calculate basic metrics
 	var totalSpent, totalReceived float64
 	var spendCount, receiveCount int
-	categorySpending := make(map[string]float64)
-	categoryCount := make(map[string]int)
 
 	for _, tx := range transactions {
 		txType, _ := tx["type"].(string)
 		amount, _ := tx["amount"].(float64)
-		description, _ := tx["description"].(string)
-
-		category := categorizeTransaction(description)
 
 		switch txType {
 		case "send":
 			totalSpent += amount
 			spendCount++
-			categorySpending[category] += amount
-			categoryCount[category]++
 		case "receive":
 			totalReceived += amount
 			receiveCount++
@@ -504,118 +707,22 @@ func analyzeTransactions(transactions []map[string]interface{}, days int) map[st
 	}
 
 	avgDailySpend := totalSpent / float64(days)
-	netCashFlow := totalReceived - totalSpent
-
-	// Find top spending categories
-	type categoryInfo struct {
-		name       string
-		amount     float64
-		count      int
-		percentage float64
-	}
-	categories := []categoryInfo{}
-	for name, amount := range categorySpending {
-		percentage := 0.0
-		if totalSpent > 0 {
-			percentage = (amount / totalSpent) * 100
-		}
-		categories = append(categories, categoryInfo{
-			name:       name,
-			amount:     amount,
-			count:      categoryCount[name],
-			percentage: percentage,
-		})
-	}
-	// Sort by amount (highest first)
-	sort.Slice(categories, func(i, j int) bool {
-		return categories[i].amount > categories[j].amount
-	})
-
-	// Take top 5 categories
-	topCategories := []map[string]interface{}{}
-	for i := 0; i < len(categories) && i < 5; i++ {
-		topCategories = append(topCategories, map[string]interface{}{
-			"category":   categories[i].name,
-			"amount":     fmt.Sprintf("%.2f", categories[i].amount),
-			"count":      categories[i].count,
-			"percentage": fmt.Sprintf("%.1f%%", categories[i].percentage),
-		})
-	}
-
-	// Generate human-readable insights
-	insights := []string{
-		fmt.Sprintf("You made %d spending transactions over %d days", spendCount, days),
-		fmt.Sprintf("Average daily spend: $%.2f", avgDailySpend),
-	}
-
-	if netCashFlow > 0 {
-		insights = append(insights, fmt.Sprintf("Great! You're cash flow positive with $%.2f net income", netCashFlow))
-	} else if netCashFlow < 0 {
-		insights = append(insights, fmt.Sprintf("You spent $%.2f more than you received this period", math.Abs(netCashFlow)))
-	}
-
-	if len(topCategories) > 0 {
-		topCat := categories[0]
-		insights = append(insights, fmt.Sprintf("Your biggest spending category is %s (%.0f%% of spending)", topCat.name, topCat.percentage))
-	}
 
 	return map[string]interface{}{
-		"total_spent":      fmt.Sprintf("%.2f", totalSpent),
-		"total_received":   fmt.Sprintf("%.2f", totalReceived),
-		"net_cash_flow":    fmt.Sprintf("%.2f", netCashFlow),
-		"spend_count":      spendCount,
-		"receive_count":    receiveCount,
-		"avg_daily_spend":  fmt.Sprintf("%.2f", avgDailySpend),
-		"velocity":         calculateVelocity(spendCount, days),
-		"top_categories":   topCategories,
-		"insights":         insights,
+		"total_spent":     fmt.Sprintf("%.2f", totalSpent),
+		"total_received":  fmt.Sprintf("%.2f", totalReceived),
+		"spend_count":     spendCount,
+		"receive_count":   receiveCount,
+		"avg_daily_spend": fmt.Sprintf("%.2f", avgDailySpend),
+		"velocity":        calculateVelocity(spendCount, days),
+		"insights": []string{
+			fmt.Sprintf("You made %d spending transactions over %d days", spendCount, days),
+			fmt.Sprintf("Average daily spend: $%.2f", avgDailySpend),
+			"Consider setting up savings goals to build financial cushion",
+		},
 	}
 }
 
-// categorizeTransaction maps merchant descriptions to spending categories
-// Uses keyword matching to classify transactions
-func categorizeTransaction(description string) string {
-	text := strings.ToLower(description)
-
-	// Food & Dining
-	if strings.Contains(text, "starbucks") || strings.Contains(text, "coffee") ||
-		strings.Contains(text, "chipotle") || strings.Contains(text, "pizza") ||
-		strings.Contains(text, "food") || strings.Contains(text, "doordash") ||
-		strings.Contains(text, "restaurant") || strings.Contains(text, "cafe") {
-		return "Food & Dining"
-	}
-
-	// Transportation
-	if strings.Contains(text, "uber") || strings.Contains(text, "lyft") ||
-		strings.Contains(text, "gas") || strings.Contains(text, "metro") ||
-		strings.Contains(text, "parking") {
-		return "Transportation"
-	}
-
-	// Shopping
-	if strings.Contains(text, "amazon") || strings.Contains(text, "target") ||
-		strings.Contains(text, "nike") || strings.Contains(text, "store") {
-		return "Shopping"
-	}
-
-	// Entertainment
-	if strings.Contains(text, "netflix") || strings.Contains(text, "spotify") ||
-		strings.Contains(text, "movie") || strings.Contains(text, "steam") ||
-		strings.Contains(text, "hulu") || strings.Contains(text, "disney") {
-		return "Entertainment"
-	}
-
-	// Bills & Utilities
-	if strings.Contains(text, "bill") || strings.Contains(text, "electric") ||
-		strings.Contains(text, "internet") || strings.Contains(text, "phone") {
-		return "Bills & Utilities"
-	}
-
-	return "Other"
-}
-
-// calculateVelocity determines spending frequency (low/moderate/high)
-// Based on average transactions per week
 func calculateVelocity(transactionCount, days int) string {
 	txPerWeek := float64(transactionCount) / float64(days) * 7
 
@@ -633,33 +740,26 @@ func calculateVelocity(transactionCount, days int) string {
 // CUSTOM TOOL: SUBSCRIPTION ANALYZER
 // ============================================================================
 
-// createSubscriptionAnalyzerTool builds a tool that detects recurring payments
-// Identifies subscriptions by finding payment patterns with regular intervals
 func createSubscriptionAnalyzerTool(liminalExecutor core.ToolExecutor) core.Tool {
 	return tools.New("analyze_subscriptions").
-		Description("Scan transaction history to identify recurring subscriptions and recurring payments. Returns subscription patterns, total monthly costs, and cancellation insights. Uses mock data by default for demo purposes.").
+		Description("Scan Transaction History to identify recurring subscriptions and recurring payments. Returns subscription patters, total month costs, and cancellation insights.").
 		Schema(tools.ObjectSchema(map[string]interface{}{
-			"timeframe_months": tools.IntegerProperty("Number of months to analyze for recurring patterns (default: 6)"),
+			"timeframe_months": tools.IntegerProperty("Number of months to analyze for recurring patterns (default:6)"),
 			"min_amount":       tools.NumberProperty("Minimum amount to be considered as subscription (default: 1.00)"),
 			"max_amount":       tools.NumberProperty("Maximum amount to be considered as a subscription (default: 999.99)"),
-			"use_mock":         tools.BoolProperty("Use mock data for testing (default: true)"),
 		})).
 		Handler(func(ctx context.Context, toolParams *core.ToolParams) (*core.ToolResult, error) {
 			var params struct {
 				TimeframeMonths int     `json:"timeframe_months"`
 				MinAmount       float64 `json:"min_amount"`
 				MaxAmount       float64 `json:"max_amount"`
-				UseMock         bool    `json:"use_mock"`
 			}
 			if err := json.Unmarshal(toolParams.Input, &params); err != nil {
-				// Default to mock mode
-				params.UseMock = true
-				params.TimeframeMonths = 6
-				params.MinAmount = 1.00
-				params.MaxAmount = 999.99
+				return &core.ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("invalid input: %v", err),
+				}, nil
 			}
-
-			// Set defaults
 			if params.TimeframeMonths == 0 {
 				params.TimeframeMonths = 6
 			}
@@ -670,53 +770,43 @@ func createSubscriptionAnalyzerTool(liminalExecutor core.ToolExecutor) core.Tool
 				params.MaxAmount = 999.99
 			}
 
-			var transactions []map[string]interface{}
 			now := time.Now()
 			cutoffDate := now.AddDate(0, -params.TimeframeMonths, 0)
 
-			// Get transaction data (mock or real)
-			if params.UseMock {
-				// Generate mock subscription transactions
-				transactions = generateMockSubscriptionTransactions(params.TimeframeMonths)
-				log.Printf("📊 Generated %d mock subscription transactions", len(transactions))
-			} else {
-				// Fetch real transactions
-				txRequest := map[string]interface{}{
-					"limit":      500,
-					"start_date": cutoffDate.Format("2006-01-02"),
-				}
-				txRequestJSON, _ := json.Marshal(txRequest)
-				txResponse, err := liminalExecutor.Execute(ctx, &core.ExecuteRequest{
-					UserID:    toolParams.UserID,
-					Tool:      "get_transactions",
-					Input:     txRequestJSON,
-					RequestID: toolParams.RequestID,
-				})
-				if err != nil {
-					return &core.ToolResult{
-						Success: false,
-						Error:   fmt.Sprintf("failed to fetch transactions: %v", err),
-					}, nil
-				}
-				if !txResponse.Success {
-					return &core.ToolResult{
-						Success: false,
-						Error:   fmt.Sprintf("transaction fetch failed: %s", txResponse.Error),
-					}, nil
-				}
-
-				var txData map[string]interface{}
-				if err := json.Unmarshal(txResponse.Data, &txData); err == nil {
-					if txArray, ok := txData["transactions"].([]interface{}); ok {
-						for _, tx := range txArray {
-							if txMap, ok := tx.(map[string]interface{}); ok {
-								transactions = append(transactions, txMap)
-							}
+			txRequest := map[string]interface{}{
+				"limit":      500,
+				"start_date": cutoffDate.Format("2006-01-02"),
+			}
+			txRequestJSON, _ := json.Marshal(txRequest)
+			txResponse, err := liminalExecutor.Execute(ctx, &core.ExecuteRequest{
+				UserID:    toolParams.UserID,
+				Tool:      "get_transactions",
+				Input:     txRequestJSON,
+				RequestID: toolParams.RequestID,
+			})
+			if err != nil {
+				return &core.ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("failed to fetch transactions: %v", err),
+				}, nil
+			}
+			if !txResponse.Success {
+				return &core.ToolResult{
+					Success: false,
+					Error:   fmt.Sprintf("transaction fetch failed :%s", txResponse.Error),
+				}, nil
+			}
+			var transactions []map[string]interface{}
+			var txData map[string]interface{}
+			if err := json.Unmarshal(txResponse.Data, &txData); err == nil {
+				if txArray, ok := txData["transactions"].([]interface{}); ok {
+					for _, tx := range txArray {
+						if txMap, ok := tx.(map[string]interface{}); ok {
+							transactions = append(transactions, txMap)
 						}
 					}
 				}
 			}
-
 			subscriptions := analyzeForSubscriptions(transactions, cutoffDate, params.MinAmount, params.MaxAmount)
 			result := map[string]interface{}{
 				"analysis_period":            fmt.Sprintf("%d months", params.TimeframeMonths),
@@ -725,7 +815,6 @@ func createSubscriptionAnalyzerTool(liminalExecutor core.ToolExecutor) core.Tool
 				"subscriptions":              subscriptions,
 				"total_monthly_cost":         calculateTotalMonthlyCost(subscriptions),
 				"warnings":                   generateWarnings(subscriptions),
-				"data_source":                map[string]bool{"is_mock": params.UseMock},
 				"generated_at":               now.Format(time.RFC3339),
 			}
 			return &core.ToolResult{
@@ -736,38 +825,30 @@ func createSubscriptionAnalyzerTool(liminalExecutor core.ToolExecutor) core.Tool
 		Build()
 }
 
-// analyzeForSubscriptions detects recurring payment patterns
-// Groups transactions by merchant+amount, checks for regular intervals
 func analyzeForSubscriptions(transactions []map[string]interface{}, cutoffDate time.Time, minAmount, maxAmount float64) []map[string]interface{} {
 	if len(transactions) == 0 {
 		return []map[string]interface{}{}
 	}
-
-	// Group transactions by merchant and amount
 	type paymentKey struct {
 		merchant string
 		amount   string
 	}
 	paymentGroups := make(map[paymentKey][]time.Time)
-
 	for _, tx := range transactions {
 		txType, _ := tx["type"].(string)
-		if txType != "send" { // Only look at outgoing payments
+		if txType != "send" {
 			continue
 		}
-
 		amount, _ := tx["amount"].(float64)
 		if amount < minAmount || amount > maxAmount {
 			continue
 		}
-
 		merchant := "Unknown"
 		if desc, ok := tx["description"].(string); ok && desc != "" {
 			merchant = desc
 		} else if recipient, ok := tx["recipient"].(string); ok && recipient != "" {
 			merchant = recipient
 		}
-
 		txDateStr, ok := tx["date"].(string)
 		if !ok {
 			continue
@@ -779,54 +860,42 @@ func analyzeForSubscriptions(transactions []map[string]interface{}, cutoffDate t
 		if txDate.Before(cutoffDate) {
 			continue
 		}
-
-		// Round amount to avoid floating point issues
 		roundedAmount := fmt.Sprintf("%.2f", amount)
 		key := paymentKey{merchant: merchant, amount: roundedAmount}
 		paymentGroups[key] = append(paymentGroups[key], txDate)
 	}
-
 	var subscriptions []map[string]interface{}
 	for key, dates := range paymentGroups {
-		if len(dates) < 2 { // Need at least 2 occurrences to detect pattern
+		if len(dates) < 2 {
 			continue
 		}
-
-		// Sort dates chronologically
 		sort.Slice(dates, func(i, j int) bool {
 			return dates[i].Before(dates[j])
 		})
-
-		// Calculate intervals between payments
 		intervals := make([]int, 0)
 		for i := 1; i < len(dates); i++ {
 			daysBetween := int(dates[i].Sub(dates[i-1]).Hours() / 24)
 			intervals = append(intervals, daysBetween)
 		}
-
-		// Check if intervals form a regular pattern
 		if isRegularPattern(intervals) {
 			amount, _ := strconv.ParseFloat(key.amount, 64)
 			frequency := detectFrequency(intervals)
 			subscription := map[string]interface{}{
-				"merchant":        key.merchant,
-				"amount":          amount,
-				"frequency":       frequency,
-				"occurrences":     len(dates),
-				"last_occurrence": dates[len(dates)-1].Format("2006-01-02"),
-				"estimated_next":  estimateNextPayment(dates[len(dates)-1], frequency),
-				"total_paid":      amount * float64(len(dates)),
-				"confidence":      calculateConfidence(len(dates), intervals),
+				"merchant":       key.merchant,
+				"amount":         amount,
+				"frequency":      frequency,
+				"occurences":     len(dates),
+				"last_occurence": dates[len(dates)-1].Format("2006-01-02"),
+				"estimated_next": estimateNextPayment(dates[len(dates)-1], frequency),
+				"total_paid":     amount * float64(len(dates)),
+				"confidence":     calculateConfidence(len(dates), intervals),
 			}
 			subscriptions = append(subscriptions, subscription)
 		}
 	}
-
 	return subscriptions
 }
 
-// isRegularPattern checks if payment intervals are consistent (within 20% tolerance)
-// Returns true if 70% or more intervals fall within tolerance
 func isRegularPattern(intervals []int) bool {
 	if len(intervals) == 0 {
 		return false
@@ -836,9 +905,8 @@ func isRegularPattern(intervals []int) bool {
 		sum += interval
 	}
 	avg := float64(sum) / float64(len(intervals))
-
 	withinTolerance := 0
-	tolerance := avg * 0.2 // 20% tolerance
+	tolerance := avg * 0.2
 	for _, interval := range intervals {
 		if math.Abs(float64(interval)-avg) <= tolerance {
 			withinTolerance++
@@ -847,7 +915,6 @@ func isRegularPattern(intervals []int) bool {
 	return float64(withinTolerance)/float64(len(intervals)) >= 0.7
 }
 
-// detectFrequency classifies payment frequency based on average interval
 func detectFrequency(intervals []int) string {
 	if len(intervals) == 0 {
 		return "unknown"
@@ -857,7 +924,6 @@ func detectFrequency(intervals []int) string {
 		sum += interval
 	}
 	avgDays := float64(sum) / float64(len(intervals))
-
 	switch {
 	case avgDays >= 25 && avgDays <= 35:
 		return "monthly"
@@ -870,13 +936,12 @@ func detectFrequency(intervals []int) string {
 	case avgDays >= 7 && avgDays <= 14:
 		return "biweekly"
 	case avgDays >= 1 && avgDays <= 7:
-		return "weekly"
+		return "week"
 	default:
 		return "irregular"
 	}
 }
 
-// estimateNextPayment predicts the next payment date based on frequency
 func estimateNextPayment(lastPayment time.Time, frequency string) string {
 	switch frequency {
 	case "monthly":
@@ -889,14 +954,13 @@ func estimateNextPayment(lastPayment time.Time, frequency string) string {
 		return lastPayment.AddDate(1, 0, 0).Format("2006-01-02")
 	case "biweekly":
 		return lastPayment.AddDate(0, 0, 14).Format("2006-01-02")
-	case "weekly":
+	case "week":
 		return lastPayment.AddDate(0, 0, 7).Format("2006-01-02")
 	default:
 		return "unknown"
 	}
 }
 
-// calculateConfidence determines detection confidence based on occurrences and regularity
 func calculateConfidence(occurrences int, intervals []int) string {
 	if occurrences >= 4 && isRegularPattern(intervals) {
 		return "high"
@@ -907,8 +971,6 @@ func calculateConfidence(occurrences int, intervals []int) string {
 	}
 }
 
-// calculateTotalMonthlyCost normalizes all subscriptions to monthly cost
-// Converts quarterly, annual, etc. to equivalent monthly amount
 func calculateTotalMonthlyCost(subscriptions []map[string]interface{}) float64 {
 	var totalMonthly float64
 	for _, sub := range subscriptions {
@@ -924,36 +986,29 @@ func calculateTotalMonthlyCost(subscriptions []map[string]interface{}) float64 {
 		case "annual":
 			totalMonthly += amount / 12
 		case "biweekly":
-			totalMonthly += amount * 2.167 // ~26 payments/year ÷ 12 months
-		case "weekly":
-			totalMonthly += amount * 4.333 // ~52 payments/year ÷ 12 months
+			totalMonthly += amount * 2.167
+		case "week":
+			totalMonthly += amount * 4.333
 		}
 	}
 	return math.Round(totalMonthly*100) / 100
 }
 
-// generateWarnings creates actionable insights about subscriptions
-// Identifies duplicate categories, inactive subscriptions, and savings opportunities
 func generateWarnings(subscriptions []map[string]interface{}) []string {
 	warnings := make([]string, 0)
 	if len(subscriptions) == 0 {
-		warnings = append(warnings, "No subscriptions were detected in your transaction history.")
+		warnings = append(warnings, "No subscriptions were detected at all in your transaction history.")
 		return warnings
 	}
-
 	totalMonthly := calculateTotalMonthlyCost(subscriptions)
 	warnings = append(warnings, fmt.Sprintf("You are spending approximately $%.2f per month on subscriptions.", totalMonthly))
-
-	// Check for duplicate categories (e.g., multiple streaming services)
 	merchantCategories := make(map[string][]string)
 	knownPatterns := map[string][]string{
 		"streaming": {"netflix", "hulu", "disney", "prime", "spotify", "hbo", "apple tv", "youtube premium"},
-		"music":     {"spotify", "apple music", "youtube music", "tidal", "pandora"},
+		"music":     {"spotify", "apply music", "youtube music", "tidal", "pandora"},
 		"cloud":     {"dropbox", "google one", "icloud", "onedrive"},
-		"fitness":   {"peloton", "classpass", "apple fitness", "strava", "planet fitness"},
-		"software":  {"adobe", "github", "office"},
+		"fitness":   {"peloton", "classpass", "apple fitness", "strava"},
 	}
-
 	for _, sub := range subscriptions {
 		merchant, _ := sub["merchant"].(string)
 		merchantLower := strings.ToLower(merchant)
@@ -966,31 +1021,24 @@ func generateWarnings(subscriptions []map[string]interface{}) []string {
 			}
 		}
 	}
-
-	// Warn about duplicate categories
 	for category, merchants := range merchantCategories {
 		if len(merchants) > 1 {
-			warnings = append(warnings, fmt.Sprintf("You have multiple %s subscriptions: %s. Consider consolidating.", category, strings.Join(merchants, ", ")))
+			warnings = append(warnings, fmt.Sprintf("you have multiple %s subscriptions. %s Consider consolidating.", category, strings.Join(merchants, ",")))
 		}
 	}
-
-	// Check for potentially inactive subscriptions
 	now := time.Now()
 	for _, sub := range subscriptions {
-		occurrences, _ := sub["occurrences"].(int)
-		lastDateStr, _ := sub["last_occurrence"].(string)
-		lastDate, err := time.Parse("2006-01-02", lastDateStr)
-		if err == nil && occurrences < 3 && now.Sub(lastDate).Hours()/24 > 90 {
+		occurences, _ := sub["occurences"].(int)
+		lastDatestr, _ := sub["last_occurence"].(string)
+		lastDate, err := time.Parse("2006-01-02", lastDatestr)
+		if err == nil && occurences < 3 && now.Sub(lastDate).Hours()/24 > 90 {
 			merchant, _ := sub["merchant"].(string)
-			warnings = append(warnings, fmt.Sprintf("Subscription to '%s' seems inactive (last paid %s). Consider cancelling if you no longer use it.", merchant, lastDateStr))
+			warnings = append(warnings, fmt.Sprintf("Subscription to '%s' seems inactive (last paid %s). Consider cancelling if you no longer use.", merchant, lastDatestr))
 		}
 	}
-
-	// Suggest potential savings
 	if totalMonthly > 50 {
 		savings := math.Round(totalMonthly*0.1*100) / 100
-		warnings = append(warnings, fmt.Sprintf("Tip: Cancelling just 10%% of your subscriptions could save you $%.2f monthly!", savings))
+		warnings = append(warnings, fmt.Sprintf("Tip: Cancelling just 10%% of your subscriptions can possibly save you $%.2f monthly!", savings))
 	}
-
 	return warnings
 }
