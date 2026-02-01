@@ -9,7 +9,7 @@
 ![React](https://img.shields.io/badge/React-18+-61DAFB.svg)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5+-3178C6.svg)
 
-[Quick Start](#-5-minute-quickstart) • [Features](#-features) • [API](#-tools) • [Examples](#-example-queries) • [Hackathon](#-hackathon-project-ideas)
+[Quick Start](#-5-minute-quickstart) • [Features](#-features) • [API](#-available-tools) • [Examples](#-example-queries) • [Hackathon](#-hackathon-project-ideas)
 
 </div>
 
